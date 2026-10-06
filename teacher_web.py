@@ -1,5 +1,7 @@
 import streamlit as st
 import requests
+import random
+import string
 from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(page_title="EXAMFLOW — Lærerdashbord", page_icon="🌿", layout="wide")
@@ -31,11 +33,24 @@ st.markdown("""
 
 st.title("🌿 EXAMFLOW — Lærerdashbord")
 
+# Generer en standardkode dersom det ikke finnes en fra før
+if "provekode" not in st.session_state:
+    st.session_state.provekode = f"EXAM-{random.randint(1000, 9999)}"
+
 col1, col2 = st.columns([1, 1.2], gap="large")
 
 with col1:
     st.subheader("📝 Opprett / Endre Prøve")
-    provekode = st.text_input("Prøvekode", value="EXAM-1935")
+    
+    # Felt for prøvekode + knapp for å generere ny kode
+    provekode_input = st.text_input("Prøvekode", value=st.session_state.provekode)
+    st.session_state.provekode = provekode_input
+    
+    if st.button("🎲 Generer Ny Tilfeldig Kode"):
+        ny_tall = random.randint(1000, 9999)
+        st.session_state.provekode = f"EXAM-{ny_tall}"
+        st.rerun()
+
     instruksjoner = st.text_area("Oppgavetekst / Instruksjoner", value="Skriv 1000 ord om dette...", height=180)
     
     if st.button("🚀 Publiser Prøve"):
@@ -45,23 +60,23 @@ with col1:
             "active": True,
             "aktiv": True
         }
-        r1 = requests.put(f"{FIREBASE_URL}/exams/{provekode}.json", json=payload)
-        r2 = requests.put(f"{FIREBASE_URL}/proever/{provekode}.json", json=payload)
+        r1 = requests.put(f"{FIREBASE_URL}/exams/{st.session_state.provekode}.json", json=payload)
+        r2 = requests.put(f"{FIREBASE_URL}/proever/{st.session_state.provekode}.json", json=payload)
         
         if r1.status_code == 200 or r2.status_code == 200:
-            st.success(f"Prøven {provekode} er publisert!")
+            st.success(f"Prøven {st.session_state.provekode} er publisert!")
         else:
             st.error("Kunne ikke lagre i Firebase.")
 
 with col2:
     st.subheader("📊 Live Overvåking & Tekst i Sanntid")
-    active_code = st.text_input("Sjekk prøvekode", value="EXAM-1935")
+    active_code = st.text_input("Overvåk prøvekode", value=st.session_state.provekode)
     
-    # Hent levende tekster, innkoblede elever og varsler fra Firebase
+    # Hent live-data fra Firebase
     live_data = requests.get(f"{FIREBASE_URL}/exams/{active_code}/live_texts.json").json() or {}
     alerts_data = requests.get(f"{FIREBASE_URL}/exams/{active_code}/alerts.json").json() or {}
     
-    # ⚠️ Varslinger (f.eks. ved mistenkelig oppførsel / tab-switching)
+    # ⚠️ Varslinger (f.eks. ved mistenkelig oppførsel)
     if alerts_data and isinstance(alerts_data, dict):
         st.error("⚠️ ADVARSEL / VARSLINGER REGISTRERT:")
         for student, alert_msg in alerts_data.items():
@@ -72,7 +87,6 @@ with col2:
         st.success(f"Viser live data for {len(live_data)} elev(er) (Oppdateres hvert 3. sek)")
         
         for student_name, student_content in live_data.items():
-            # Hent teksten eller objektet
             if isinstance(student_content, dict):
                 tekst = student_content.get("text", student_content.get("tekst", ""))
                 ordteller = student_content.get("words", len(tekst.split()))
@@ -85,4 +99,4 @@ with col2:
             with st.expander(f"👤 **{student_name}** — {ordteller} ord | Status: `{status}`", expanded=True):
                 st.text_area(f"Tekst fra {student_name}", value=tekst, height=150, key=f"text_{student_name}", disabled=True)
     else:
-        st.info("Ingen live tekster registrert ennå. Vent til eleven begynner å skrive...")
+        st.info("Ingen live tekster registrert ennå på denne koden.")
