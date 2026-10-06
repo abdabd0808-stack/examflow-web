@@ -1,7 +1,6 @@
 import streamlit as st
 import requests
 import random
-import string
 from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(page_title="EXAMFLOW — Lærerdashbord", page_icon="🌿", layout="wide")
@@ -33,67 +32,75 @@ st.markdown("""
 
 st.title("🌿 EXAMFLOW — Lærerdashbord")
 
-# Generer en standardkode dersom det ikke finnes en fra før
 if "provekode" not in st.session_state:
-    st.session_state.provekode = f"EXAM-{random.randint(1000, 9999)}"
+    st.session_state.provekode = "EXAM-1294"
 
 col1, col2 = st.columns([1, 1.2], gap="large")
 
 with col1:
     st.subheader("📝 Opprett / Endre Prøve")
     
-    # Felt for prøvekode + knapp for å generere ny kode
     provekode_input = st.text_input("Prøvekode", value=st.session_state.provekode)
-    st.session_state.provekode = provekode_input
+    st.session_state.provekode = provekode_input.strip()
     
     if st.button("🎲 Generer Ny Tilfeldig Kode"):
         ny_tall = random.randint(1000, 9999)
         st.session_state.provekode = f"EXAM-{ny_tall}"
         st.rerun()
 
-    instruksjoner = st.text_area("Oppgavetekst / Instruksjoner", value="Skriv 1000 ord om dette...", height=180)
+    instruksjoner = st.text_area("Oppgavetekst / Instruksjoner", value="Skriv en tekst om valgt emne...", height=180)
     
     if st.button("🚀 Publiser Prøve"):
+        # Vi bruker PATCH for å ikke slette live-tekster fra elever!
         payload = {
+            "prompt": instruksjoner,
             "instruction": instruksjoner,
             "instruksjoner": instruksjoner,
+            "oppgave": instruksjoner,
             "active": True,
             "aktiv": True
         }
-        r1 = requests.put(f"{FIREBASE_URL}/exams/{st.session_state.provekode}.json", json=payload)
-        r2 = requests.put(f"{FIREBASE_URL}/proever/{st.session_state.provekode}.json", json=payload)
+        
+        r1 = requests.patch(f"{FIREBASE_URL}/exams/{st.session_state.provekode}.json", json=payload)
+        r2 = requests.patch(f"{FIREBASE_URL}/proever/{st.session_state.provekode}.json", json=payload)
         
         if r1.status_code == 200 or r2.status_code == 200:
-            st.success(f"Prøven {st.session_state.provekode} er publisert!")
+            st.success(f"✅ Prøven {st.session_state.provekode} er publisert!")
         else:
-            st.error("Kunne ikke lagre i Firebase.")
+            st.error("❌ Kunne ikke lagre i Firebase.")
 
 with col2:
     st.subheader("📊 Live Overvåking & Tekst i Sanntid")
-    active_code = st.text_input("Overvåk prøvekode", value=st.session_state.provekode)
+    active_code = st.text_input("Overvåk prøvekode", value=st.session_state.provekode).strip()
     
     # Hent live-data fra Firebase
     live_data = requests.get(f"{FIREBASE_URL}/exams/{active_code}/live_texts.json").json() or {}
     alerts_data = requests.get(f"{FIREBASE_URL}/exams/{active_code}/alerts.json").json() or {}
     
-    # ⚠️ Varslinger (f.eks. ved mistenkelig oppførsel)
+    # ⚠️ Varslinger
     if alerts_data and isinstance(alerts_data, dict):
-        st.error("⚠️ ADVARSEL / VARSLINGER REGISTRERT:")
-        for student, alert_msg in alerts_data.items():
-            st.markdown(f"<div class='alert-box'>🚨 <b>{student}</b>: {alert_msg}</div>", unsafe_allow_html=True)
+        st.warning("⚠️ REGISTRERTE HENDELSER / VARSLINGER:")
+        for alert_key, alert_item in alerts_data.items():
+            if isinstance(alert_item, dict):
+                elev = alert_item.get("student", alert_item.get("elev", "Ukjent elev"))
+                melding = alert_item.get("message", alert_item.get("melding", str(alert_item)))
+                tid = alert_item.get("time", alert_item.get("tid", ""))
+                st.markdown(f"<div class='alert-box'>🚨 <b>{elev}</b> [{tid}]: {melding}</div>", unsafe_allow_html=True)
+            else:
+                st.markdown(f"<div class='alert-box'>🚨 {alert_item}</div>", unsafe_allow_html=True)
             
     # 📝 Live tekstvisning per elev
     if live_data and isinstance(live_data, dict):
-        st.success(f"Viser live data for {len(live_data)} elev(er) (Oppdateres hvert 3. sek)")
+        st.success(f"Viser live data for {len(live_data)} elev(er) (Oppdateres automatisk)")
         
         for student_name, student_content in live_data.items():
             if isinstance(student_content, dict):
                 tekst = student_content.get("text", student_content.get("tekst", ""))
-                ordteller = student_content.get("words", len(tekst.split()))
+                ordteller = student_content.get("words", len(tekst.split()) if tekst else 0)
                 status = student_content.get("status", "Aktiv")
             else:
                 tekst = str(student_content)
-                ordteller = len(tekst.split())
+                ordteller = len(tekst.split()) if tekst else 0
                 status = "Aktiv"
 
             with st.expander(f"👤 **{student_name}** — {ordteller} ord | Status: `{status}`", expanded=True):
