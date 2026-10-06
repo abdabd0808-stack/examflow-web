@@ -27,13 +27,25 @@ st.markdown("""
         border-radius: 8px;
         margin-bottom: 10px;
     }
+    .student-text-box {
+        background-color: #1e222a;
+        border: 1px solid #313745;
+        border-radius: 8px;
+        padding: 12px;
+        color: #e0e0e0;
+        font-family: monospace;
+        white-space: pre-wrap;
+        min-height: 100px;
+        max-height: 250px;
+        overflow-y: auto;
+    }
     </style>
 """, unsafe_allow_html=True)
 
 st.title("🌿 EXAMFLOW — Lærerdashbord")
 
 if "provekode" not in st.session_state:
-    st.session_state.provekode = "EXAM-1294"
+    st.session_state.provekode = "EXAM-5114"
 
 col1, col2 = st.columns([1, 1.2], gap="large")
 
@@ -48,10 +60,9 @@ with col1:
         st.session_state.provekode = f"EXAM-{ny_tall}"
         st.rerun()
 
-    instruksjoner = st.text_area("Oppgavetekst / Instruksjoner", value="Skriv en tekst om valgt emne...", height=180)
+    instruksjoner = st.text_area("Oppgavetekst / Instruksjoner", value="jobb i 4 timer om renessansen", height=180)
     
     if st.button("🚀 Publiser Prøve"):
-        # Vi bruker PATCH for å ikke slette live-tekster fra elever!
         payload = {
             "prompt": instruksjoner,
             "instruction": instruksjoner,
@@ -91,7 +102,7 @@ with col2:
             
     # 📝 Live tekstvisning per elev
     if live_data and isinstance(live_data, dict):
-        st.success(f"Viser live data for {len(live_data)} elev(er) (Oppdateres automatisk)")
+        st.success(f"Viser live data for {len(live_data)} elev(er) (Auto-oppdatert #{count})")
         
         for student_name, student_content in live_data.items():
             if isinstance(student_content, dict):
@@ -104,6 +115,10 @@ with col2:
                 status = "Aktiv"
 
             with st.expander(f"👤 **{student_name}** — {ordteller} ord | Status: `{status}`", expanded=True):
-                st.text_area(f"Tekst fra {student_name}", value=tekst, height=150, key=f"text_{student_name}", disabled=True)
+                # Dynamisk visning som oppdaterer hele teksten i sanntid
+                if not tekst:
+                    st.caption("Elev har ikke skrevet noe ennå...")
+                else:
+                    st.markdown(f"<div class='student-text-box'>{tekst}</div>", unsafe_allow_html=True)
     else:
         st.info("Ingen live tekster registrert ennå på denne koden.")
