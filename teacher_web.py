@@ -10,7 +10,7 @@ st.set_page_config(
 )
 
 # Firebase Realtime Database URL
-FIREBASE_URL = "https://exam-flow-default-rtdb.europe-west1.firebasedatabase.app"
+FIREBASE_URL = "https://exam-flow-bedc2-default-rtdb.europe-west1.firebasedatabase.app/"
 
 # Custom CSS for design og farger
 st.markdown("""
