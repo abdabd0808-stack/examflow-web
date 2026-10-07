@@ -95,6 +95,9 @@ if "start_times" not in st.session_state:
 if "last_change_time" not in st.session_state:
     st.session_state["last_change_time"] = {}
 
+if "frozen_metrics" not in st.session_state:
+    st.session_state["frozen_metrics"] = {}
+
 # --- DASHBORD HEADER ---
 st.title("🌿 EXAMFLOW — Lærer Dashbord")
 st.write("Administrer prøver, overvåk elever i realtid og last ned leverte besvarelser.")
@@ -142,7 +145,7 @@ with tabs[0]:
 
         students = exam_data.get("students_joined", {})
         live_texts = exam_data.get("live_texts", {})
-        submissions = exam_data.get("submissions", {})  # Henter leverte elever
+        submissions = exam_data.get("submissions", {})
 
         now_time = datetime.now()
         now_str = now_time.strftime("%H:%M:%S")
@@ -150,7 +153,6 @@ with tabs[0]:
         # ELEVANALYSE FOR MISTENKELIG ADBERD OG INAKTIVITET
         if isinstance(students, dict) and students:
             for student_key in students.keys():
-                # Hopp over automatisk oppdatering og avviksdeteksjon hvis eleven har levert
                 is_submitted = isinstance(submissions, dict) and student_key in submissions
                 if is_submitted:
                     continue
@@ -250,21 +252,7 @@ with tabs[0]:
                     word_count = len(text_content.split())
                     history = {}
 
-                # Hvis eleven har levert, viser vi teksten som faktisk er levert
-                if is_submitted:
-                    text_content = str(submissions[student_key])
-                    word_count = len(text_content.split())
-
-                start_dt = st.session_state["start_times"].get(student_key, now_time)
-                elapsed_minutes = max(0.1, (now_time - start_dt).total_seconds() / 60.0)
-                expected_normal_words = int(elapsed_minutes * NORMAL_WORDS_PER_MINUTE)
-
-                if expected_normal_words > 0:
-                    pct_vs_normal = ((word_count - expected_normal_words) / expected_normal_words) * 100
-                else:
-                    pct_vs_normal = 0.0
-
-                # BYGG LOKAL HISTORIKK FOR GRAFEN
+                # BYGG OG HÅNDTER CACHE
                 if student_key not in st.session_state["history_cache"]:
                     st.session_state["history_cache"][student_key] = []
 
@@ -273,8 +261,16 @@ with tabs[0]:
                 if cache_list and "Faktisk ordtall" not in cache_list[0]:
                     cache_list.clear()
 
-                # BARE OPPDATER CACHE HVIS ELEVEN IKKE HAR LEVERT
                 if not is_submitted:
+                    start_dt = st.session_state["start_times"].get(student_key, now_time)
+                    elapsed_minutes = max(0.1, (now_time - start_dt).total_seconds() / 60.0)
+                    expected_normal_words = int(elapsed_minutes * NORMAL_WORDS_PER_MINUTE)
+
+                    if expected_normal_words > 0:
+                        pct_vs_normal = ((word_count - expected_normal_words) / expected_normal_words) * 100
+                    else:
+                        pct_vs_normal = 0.0
+
                     if isinstance(history, dict) and history:
                         cache_list.clear()
                         for h in history.values():
@@ -307,19 +303,51 @@ with tabs[0]:
                                     "Normal skrivehastighet (forventet)": expected_normal_words
                                 })
 
-                # ELEVKORT WITH STATUS
+                    first_words = cache_list[0].get("Faktisk ordtall", word_count) if cache_list else word_count
+                    word_delta = word_count - first_words
+
+                else:
+                    # ELEV ER LEVERT -> LÅS/FRYS ALL DATA
+                    text_content = str(submissions[student_key])
+                    word_count = len(text_content.split())
+
+                    if student_key not in st.session_state["frozen_metrics"]:
+                        first_words = cache_list[0].get("Faktisk ordtall", word_count) if cache_list else word_count
+                        word_delta = word_count - first_words
+                        last_expected = cache_list[-1].get("Normal skrivehastighet (forventet)", 0) if cache_list else 0
+
+                        if last_expected > 0:
+                            frozen_pct = ((word_count - last_expected) / last_expected) * 100
+                        else:
+                            frozen_pct = 0.0
+
+                        st.session_state["frozen_metrics"][student_key] = {
+                            "word_count": word_count,
+                            "word_delta": word_delta,
+                            "pct_vs_normal": frozen_pct,
+                            "expected_normal_words": last_expected
+                        }
+
+                    frozen = st.session_state["frozen_metrics"][student_key]
+                    word_count = frozen["word_count"]
+                    word_delta = frozen["word_delta"]
+                    pct_vs_normal = frozen["pct_vs_normal"]
+                    expected_normal_words = frozen["expected_normal_words"]
+
+                # ELEVKORT
                 status_label = "✅ Levert (Fryst)" if is_submitted else "🟢 Aktiv i realtid"
                 card_title = f"👤 {display_name} — {word_count} ord | Status: {status_label}"
 
                 with st.expander(card_title, expanded=not is_submitted):
                     st.caption(f"Tekst fra {display_name} ({'LEVERT' if is_submitted else 'PÅGÅENDE'})")
                     st.text_area(f"Tekstvisning_{student_key}", value=text_content, height=180, disabled=True, label_visibility="collapsed")
-                    
-                    first_words = cache_list[0].get("Faktisk ordtall", word_count) if cache_list else word_count
-                    word_delta = word_count - first_words
 
                     m1, m2, m3 = st.columns(3)
-                    m1.metric(label="Totalt antall ord", value=f"{word_count} ord", delta=f"{word_delta:+d} ord" if not is_submitted else None)
+                    m1.metric(
+                        label="Totalt antall ord", 
+                        value=f"{word_count} ord", 
+                        delta=f"{word_delta:+d} ord" if not is_submitted else None
+                    )
                     m2.metric(
                         label="Økning vs normal hastighet (25 ord/min)", 
                         value=f"{pct_vs_normal:+.1f}%", 
