@@ -262,6 +262,10 @@ with tabs[0]:
 
                 cache_list = st.session_state["history_cache"][student_key]
 
+                # Tøm cache hvis den inneholder data fra gammel datastruktur
+                if cache_list and "Faktisk ordtall" not in cache_list[0]:
+                    cache_list.clear()
+
                 if isinstance(history, dict) and history:
                     cache_list.clear()
                     for h in history.values():
@@ -299,7 +303,7 @@ with tabs[0]:
                     st.caption(f"Tekst fra {display_name}")
                     st.text_area(f"Tekstvisning_{student_key}", value=text_content, height=180, disabled=True, label_visibility="collapsed")
                     
-                    first_words = cache_list[0]["Faktisk ordtall"] if cache_list else word_count
+                    first_words = cache_list[0].get("Faktisk ordtall", word_count) if cache_list else word_count
                     word_delta = word_count - first_words
 
                     m1, m2, m3 = st.columns(3)
