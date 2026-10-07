@@ -137,12 +137,12 @@ with tabs[0]:
         if prompt_text:
             st.info(f"📌 **Oppgavetekst:** {prompt_text}")
 
-        # SAMLER VARSLINGER FRA FIREBASE + AUTOMATISK ANOMALIDETEKSJON
         raw_alerts = exam_data.get("alerts", {})
         auto_alerts = []
 
         students = exam_data.get("students_joined", {})
         live_texts = exam_data.get("live_texts", {})
+        submissions = exam_data.get("submissions", {})  # Henter leverte elever
 
         now_time = datetime.now()
         now_str = now_time.strftime("%H:%M:%S")
@@ -150,6 +150,11 @@ with tabs[0]:
         # ELEVANALYSE FOR MISTENKELIG ADBERD OG INAKTIVITET
         if isinstance(students, dict) and students:
             for student_key in students.keys():
+                # Hopp over automatisk oppdatering og avviksdeteksjon hvis eleven har levert
+                is_submitted = isinstance(submissions, dict) and student_key in submissions
+                if is_submitted:
+                    continue
+
                 display_name = student_key.replace("_", " ")
                 student_info = live_texts.get(student_key, {}) if isinstance(live_texts, dict) else {}
 
@@ -160,7 +165,6 @@ with tabs[0]:
                     text_content = str(student_info)
                     word_count = len(text_content.split())
 
-                # Registrer starttidspunkt for å beregne forventet progresjon
                 if student_key not in st.session_state["start_times"]:
                     st.session_state["start_times"][student_key] = now_time
 
@@ -168,13 +172,12 @@ with tabs[0]:
                 prev_words = prev_info["words"]
                 word_diff = word_count - prev_words
 
-                # Tracker inaktivitet
                 if student_key not in st.session_state["last_change_time"]:
                     st.session_state["last_change_time"][student_key] = now_time
                 elif word_diff != 0:
                     st.session_state["last_change_time"][student_key] = now_time
 
-                # ⚡ 1. SJEKK FOR EKSTREM SKRIVEHASTIGHET / PASTE (LIM INN)
+                # ⚡ 1. SJEKK FOR EKSTREM SKRIVEHASTIGHET / PASTE
                 if word_diff >= 30:
                     auto_alerts.append({
                         "student": display_name,
@@ -182,7 +185,7 @@ with tabs[0]:
                         "message": f"⚡ Ekstrem økning (+{word_diff} ord på 3 sek). Sannsynligvis limt inn ekstern tekst!"
                     })
 
-                # 🔤 2. SJEKK FOR TASTATURENS SPAM / TILTET TEKST
+                # 🔤 2. SJEKK FOR TASTATURENS SPAM
                 words = text_content.split()
                 has_long_random_words = any(len(w) > 25 for w in words)
                 if has_long_random_words:
@@ -234,6 +237,8 @@ with tabs[0]:
 
             for student_key in students.keys():
                 display_name = student_key.replace("_", " ")
+                is_submitted = isinstance(submissions, dict) and student_key in submissions
+
                 student_info = live_texts.get(student_key, {}) if isinstance(live_texts, dict) else {}
 
                 if isinstance(student_info, dict):
@@ -245,12 +250,15 @@ with tabs[0]:
                     word_count = len(text_content.split())
                     history = {}
 
-                # Starttid og tid gått for beregning av normal hastighet
+                # Hvis eleven har levert, viser vi teksten som faktisk er levert
+                if is_submitted:
+                    text_content = str(submissions[student_key])
+                    word_count = len(text_content.split())
+
                 start_dt = st.session_state["start_times"].get(student_key, now_time)
                 elapsed_minutes = max(0.1, (now_time - start_dt).total_seconds() / 60.0)
                 expected_normal_words = int(elapsed_minutes * NORMAL_WORDS_PER_MINUTE)
 
-                # BEREGN PROSENTVIS AVVIK I FORHOLD TIL NORMAL SKRIVEHASTIGHET
                 if expected_normal_words > 0:
                     pct_vs_normal = ((word_count - expected_normal_words) / expected_normal_words) * 100
                 else:
@@ -262,56 +270,60 @@ with tabs[0]:
 
                 cache_list = st.session_state["history_cache"][student_key]
 
-                # Tøm cache hvis den inneholder data fra gammel datastruktur
                 if cache_list and "Faktisk ordtall" not in cache_list[0]:
                     cache_list.clear()
 
-                if isinstance(history, dict) and history:
-                    cache_list.clear()
-                    for h in history.values():
-                        if isinstance(h, dict):
-                            t_str = h.get("time")
-                            w_val = h.get("words", 0)
-                            cache_list.append({
-                                "Klokkeslett": t_str,
-                                "Faktisk ordtall": w_val,
-                                "Normal skrivehastighet (forventet)": expected_normal_words
-                            })
-                else:
-                    if not cache_list:
-                        start_time_str = (now_time - timedelta(seconds=30)).strftime("%H:%M:%S")
-                        cache_list.append({
-                            "Klokkeslett": start_time_str,
-                            "Faktisk ordtall": max(0, word_count - 10),
-                            "Normal skrivehastighet (forventet)": max(1, expected_normal_words - 5)
-                        })
-                        cache_list.append({
-                            "Klokkeslett": now_str,
-                            "Faktisk ordtall": word_count,
-                            "Normal skrivehastighet (forventet)": expected_normal_words
-                        })
+                # BARE OPPDATER CACHE HVIS ELEVEN IKKE HAR LEVERT
+                if not is_submitted:
+                    if isinstance(history, dict) and history:
+                        cache_list.clear()
+                        for h in history.values():
+                            if isinstance(h, dict):
+                                t_str = h.get("time")
+                                w_val = h.get("words", 0)
+                                cache_list.append({
+                                    "Klokkeslett": t_str,
+                                    "Faktisk ordtall": w_val,
+                                    "Normal skrivehastighet (forventet)": expected_normal_words
+                                })
                     else:
-                        if cache_list[-1]["Klokkeslett"] != now_str:
+                        if not cache_list:
+                            start_time_str = (now_time - timedelta(seconds=30)).strftime("%H:%M:%S")
+                            cache_list.append({
+                                "Klokkeslett": start_time_str,
+                                "Faktisk ordtall": max(0, word_count - 10),
+                                "Normal skrivehastighet (forventet)": max(1, expected_normal_words - 5)
+                            })
                             cache_list.append({
                                 "Klokkeslett": now_str,
                                 "Faktisk ordtall": word_count,
                                 "Normal skrivehastighet (forventet)": expected_normal_words
                             })
+                        else:
+                            if cache_list[-1]["Klokkeslett"] != now_str:
+                                cache_list.append({
+                                    "Klokkeslett": now_str,
+                                    "Faktisk ordtall": word_count,
+                                    "Normal skrivehastighet (forventet)": expected_normal_words
+                                })
 
-                # ELEVKORT
-                with st.expander(f"👤 {display_name} — {word_count} ord | Status: Aktiv", expanded=True):
-                    st.caption(f"Tekst fra {display_name}")
+                # ELEVKORT WITH STATUS
+                status_label = "✅ Levert (Fryst)" if is_submitted else "🟢 Aktiv i realtid"
+                card_title = f"👤 {display_name} — {word_count} ord | Status: {status_label}"
+
+                with st.expander(card_title, expanded=not is_submitted):
+                    st.caption(f"Tekst fra {display_name} ({'LEVERT' if is_submitted else 'PÅGÅENDE'})")
                     st.text_area(f"Tekstvisning_{student_key}", value=text_content, height=180, disabled=True, label_visibility="collapsed")
                     
                     first_words = cache_list[0].get("Faktisk ordtall", word_count) if cache_list else word_count
                     word_delta = word_count - first_words
 
                     m1, m2, m3 = st.columns(3)
-                    m1.metric(label="Totalt antall ord", value=f"{word_count} ord", delta=f"{word_delta:+d} ord")
+                    m1.metric(label="Totalt antall ord", value=f"{word_count} ord", delta=f"{word_delta:+d} ord" if not is_submitted else None)
                     m2.metric(
                         label="Økning vs normal hastighet (25 ord/min)", 
                         value=f"{pct_vs_normal:+.1f}%", 
-                        delta=f"{pct_vs_normal:+.1f}% vs normal"
+                        delta=f"{pct_vs_normal:+.1f}% vs normal" if not is_submitted else None
                     )
                     m3.metric(label="Forventet ordtall til nå", value=f"{expected_normal_words} ord")
 
