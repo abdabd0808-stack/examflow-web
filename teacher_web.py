@@ -298,25 +298,24 @@ with tabs[0]:
                     word_delta = word_count - first_words
 
                 else:
-                    # ELEV ER LEVERT -> LÅS/FRYS ALL DATA SÅ DET IKKE BLIR 0
+                    # ELEV ER LEVERT -> LÅS/FRYS ALL DATA
                     text_content = str(submissions[student_key])
                     word_count = len(text_content.split())
 
-                    if student_key not in st.session_state["frozen_metrics"]:
-                        # Hvis krasj/refresh har tømt history_cache, gjenoppbygg en dummy-graf basert på leveringen
-                        if not cache_list:
-                            start_time_str = (now_time - timedelta(minutes=10)).strftime("%H:%M:%S")
-                            cache_list.append({
-                                "Klokkeslett": start_time_str,
-                                "Faktisk ordtall": 0,
-                                "Normal skrivehastighet (forventet)": 0
-                            })
-                            cache_list.append({
-                                "Klokkeslett": now_str,
-                                "Faktisk ordtall": word_count,
-                                "Normal skrivehastighet (forventet)": int(word_count * 0.9)
-                            })
+                    if not cache_list:
+                        start_time_str = (now_time - timedelta(minutes=10)).strftime("%H:%M:%S")
+                        cache_list.append({
+                            "Klokkeslett": start_time_str,
+                            "Faktisk ordtall": 0,
+                            "Normal skrivehastighet (forventet)": 0
+                        })
+                        cache_list.append({
+                            "Klokkeslett": now_str,
+                            "Faktisk ordtall": word_count,
+                            "Normal skrivehastighet (forventet)": int(word_count * 0.9)
+                        })
 
+                    if student_key not in st.session_state["frozen_metrics"]:
                         first_words = cache_list[0].get("Faktisk ordtall", 0)
                         word_delta = word_count - first_words
                         
@@ -335,11 +334,11 @@ with tabs[0]:
                         }
 
                     frozen = st.session_state["frozen_metrics"][student_key]
-                    word_count = frozen["word_count"]
-                    word_delta = frozen["word_delta"]
-                    pct_vs_normal = frozen["pct_vs_normal"]
-                    expected_normal_words = frozen["expected_normal_words"]
-                    cache_list = frozen["history_snapshot"]
+                    word_count = frozen.get("word_count", word_count)
+                    word_delta = frozen.get("word_delta", 0)
+                    pct_vs_normal = frozen.get("pct_vs_normal", 0.0)
+                    expected_normal_words = frozen.get("expected_normal_words", int(word_count * 0.9))
+                    cache_list = frozen.get("history_snapshot", list(cache_list))
 
                 # ELEVKORT
                 status_label = "✅ Levert (Fryst)" if is_submitted else "🟢 Aktiv i realtid"
