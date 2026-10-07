@@ -1,124 +1,248 @@
-import streamlit as st
-import requests
-import random
-from streamlit_autorefresh import st_autorefresh
+<!DOCTYPE html>
+<html lang="no">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EXAMFLOW — Lærer Dashbord</title>
 
-st.set_page_config(page_title="EXAMFLOW — Lærerdashbord", page_icon="🌿", layout="wide")
+    <!-- Tailwind CSS for moderne design -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Firebase JS SDK (v8) -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+    
+    <!-- Chart.js for interaktiv graf -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
-# Automatisk oppdatering hvert 3. sekund (3000 ms)
-count = st_autorefresh(interval=3000, key="live_monitor")
-
-# Firebase URL
-FIREBASE_URL = "https://exam-flow-bedc2-default-rtdb.europe-west1.firebasedatabase.app"
-
-# Custom CSS
-st.markdown("""
     <style>
-    .stApp { background-color: #0e1117; color: white; }
-    div.stButton > button {
-        background-color: #ff4b4b; color: white; font-weight: bold;
-        border-radius: 8px; border: none; padding: 10px; width: 100%;
-    }
-    div.stButton > button:hover { background-color: #ff2b2b; color: white; }
-    .alert-box {
-        background-color: #4a151b;
-        border: 1px solid #ff4b4b;
-        padding: 10px;
-        border-radius: 8px;
-        margin-bottom: 10px;
-    }
-    .student-text-box {
-        background-color: #1e222a;
-        border: 1px solid #313745;
-        border-radius: 8px;
-        padding: 12px;
-        color: #e0e0e0;
-        font-family: monospace;
-        white-space: pre-wrap;
-        min-height: 100px;
-        max-height: 250px;
-        overflow-y: auto;
-    }
+        body { background-color: #f8fafc; font-family: 'Inter', sans-serif; }
     </style>
-""", unsafe_allow_html=True)
+</head>
+<body class="text-slate-800 p-6">
 
-st.title("🌿 EXAMFLOW — Lærerdashbord")
-
-if "provekode" not in st.session_state:
-    st.session_state.provekode = "EXAM-5114"
-
-col1, col2 = st.columns([1, 1.2], gap="large")
-
-with col1:
-    st.subheader("📝 Opprett / Endre Prøve")
-    
-    provekode_input = st.text_input("Prøvekode", value=st.session_state.provekode)
-    st.session_state.provekode = provekode_input.strip()
-    
-    if st.button("🎲 Generer Ny Tilfeldig Kode"):
-        ny_tall = random.randint(1000, 9999)
-        st.session_state.provekode = f"EXAM-{ny_tall}"
-        st.rerun()
-
-    instruksjoner = st.text_area("Oppgavetekst / Instruksjoner", value="jobb i 4 timer om renessansen", height=180)
-    
-    if st.button("🚀 Publiser Prøve"):
-        payload = {
-            "prompt": instruksjoner,
-            "instruction": instruksjoner,
-            "instruksjoner": instruksjoner,
-            "oppgave": instruksjoner,
-            "active": True,
-            "aktiv": True
-        }
+    <div class="max-w-7xl mx-auto space-y-6">
         
-        r1 = requests.patch(f"{FIREBASE_URL}/exams/{st.session_state.provekode}.json", json=payload)
-        r2 = requests.patch(f"{FIREBASE_URL}/proever/{st.session_state.provekode}.json", json=payload)
-        
-        if r1.status_code == 200 or r2.status_code == 200:
-            st.success(f"✅ Prøven {st.session_state.provekode} er publisert!")
-        else:
-            st.error("❌ Kunne ikke lagre i Firebase.")
-
-with col2:
-    st.subheader("📊 Live Overvåking & Tekst i Sanntid")
-    active_code = st.text_input("Overvåk prøvekode", value=st.session_state.provekode).strip()
-    
-    # Hent live-data fra Firebase
-    live_data = requests.get(f"{FIREBASE_URL}/exams/{active_code}/live_texts.json").json() or {}
-    alerts_data = requests.get(f"{FIREBASE_URL}/exams/{active_code}/alerts.json").json() or {}
-    
-    # ⚠️ Varslinger
-    if alerts_data and isinstance(alerts_data, dict):
-        st.warning("⚠️ REGISTRERTE HENDELSER / VARSLINGER:")
-        for alert_key, alert_item in alerts_data.items():
-            if isinstance(alert_item, dict):
-                elev = alert_item.get("student", alert_item.get("elev", "Ukjent elev"))
-                melding = alert_item.get("message", alert_item.get("melding", str(alert_item)))
-                tid = alert_item.get("time", alert_item.get("tid", ""))
-                st.markdown(f"<div class='alert-box'>🚨 <b>{elev}</b> [{tid}]: {melding}</div>", unsafe_allow_html=True)
-            else:
-                st.markdown(f"<div class='alert-box'>🚨 {alert_item}</div>", unsafe_allow_html=True)
+        <!-- HEADER -->
+        <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col md:flex-row justify-between items-center gap-4">
+            <div>
+                <h1 class="text-2xl font-bold text-sky-600 flex items-center gap-2">🌿 EXAMFLOW — Lærer Dashbord</h1>
+                <p class="text-slate-500 text-sm">Overvåk prøver, se elevstatus og skriveprogresjon i realtid.</p>
+            </div>
             
-    # 📝 Live tekstvisning per elev
-    if live_data and isinstance(live_data, dict):
-        st.success(f"Viser live data for {len(live_data)} elev(er) (Auto-oppdatert #{count})")
-        
-        for student_name, student_content in live_data.items():
-            if isinstance(student_content, dict):
-                tekst = student_content.get("text", student_content.get("tekst", ""))
-                ordteller = student_content.get("words", len(tekst.split()) if tekst else 0)
-                status = student_content.get("status", "Aktiv")
-            else:
-                tekst = str(student_content)
-                ordteller = len(tekst.split()) if tekst else 0
-                status = "Aktiv"
+            <div class="flex items-center gap-3">
+                <input type="text" id="examCodeInput" placeholder="Søk prøvekode (f.eks. EXAM-4821)" class="px-4 py-2 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500 uppercase font-semibold text-slate-700">
+                <button onclick="kobleTilProeve()" class="bg-sky-600 hover:bg-sky-700 text-white font-semibold px-5 py-2 rounded-xl transition-all shadow-sm">
+                    Koble til
+                </button>
+            </div>
+        </div>
 
-            with st.expander(f"👤 **{student_name}** — {ordteller} ord | Status: `{status}`", expanded=True):
-                # Dynamisk visning som oppdaterer hele teksten i sanntid
-                if not tekst:
-                    st.caption("Elev har ikke skrevet noe ennå...")
-                else:
-                    st.markdown(f"<div class='student-text-box'>{tekst}</div>", unsafe_allow_html=True)
-    else:
-        st.info("Ingen live tekster registrert ennå på denne koden.")
+        <!-- HOVEDINNHOLD -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+            <!-- VENSTRE KOLONNE: ELEVLISTE & VARSLER -->
+            <div class="space-y-6">
+                <!-- Elevliste -->
+                <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+                    <h2 class="text-lg font-bold text-slate-800 mb-3 flex items-center justify-between">
+                        <span>👥 Påloggede Elever</span>
+                        <span id="studentCount" class="text-xs bg-sky-100 text-sky-700 font-bold px-2.5 py-1 rounded-full">0</span>
+                    </h2>
+                    <ul id="studentList" class="space-y-2 max-h-60 overflow-y-auto pr-1">
+                        <li class="text-slate-400 text-sm italic">Skriv inn prøvekode for å hente elever...</li>
+                    </ul>
+                </div>
+
+                <!-- Hendelseslogg / Varsler -->
+                <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+                    <h2 class="text-lg font-bold text-slate-800 mb-3">🔔 Hendelser & Varsler</h2>
+                    <div id="alertsLog" class="space-y-2 max-h-60 overflow-y-auto text-sm pr-1">
+                        <p class="text-slate-400 italic">Ingen varsler ennå...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- HØYRE KOLONNE: LIVE TEKST & GRAF -->
+            <div class="lg:col-span-2 space-y-6">
+
+                <!-- Elevvelger og Live Tekst -->
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+                    <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-3 border-b border-slate-100 pb-4">
+                        <div>
+                            <h2 class="text-xl font-bold text-slate-800" id="selectedStudentTitle">Velg en elev</h2>
+                            <p class="text-xs text-slate-500" id="selectedStudentSub">Klikk på en elev til venstre for å se live-tekst og graf.</p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs font-semibold px-3 py-1 rounded-full bg-slate-100 text-slate-600" id="liveWordCount">0 ord</span>
+                            <span class="text-xs font-semibold px-3 py-1 rounded-full bg-slate-100 text-slate-600" id="liveStatus">Ingen elev valgt</span>
+                        </div>
+                    </div>
+
+                    <!-- Tekstfelt for live-visning -->
+                    <div id="liveTextContent" class="w-full h-48 p-4 bg-slate-50 border border-slate-200 rounded-xl overflow-y-auto whitespace-pre-wrap font-mono text-sm text-slate-800">
+                        Ingen tekst valgt...
+                    </div>
+                </div>
+
+                <!-- Graf over skriveprogresjon -->
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                    <h3 class="text-lg font-bold text-slate-800 mb-1">📈 Skriveprogresjon (Ord over tid)</h3>
+                    <p class="text-xs text-slate-500 mb-4">Viser hvordan elevens tekst har vokst igjennom prøveøkten.</p>
+                    
+                    <div class="w-full relative" style="height: 260px;">
+                        <canvas id="studentProgressChart"></canvas>
+                    </div>
+                </div>
+
+            </div>
+
+        </div>
+
+    </div>
+
+    <script>
+        // FIREBASE KONFIGURASJON
+        const firebaseConfig = {
+            databaseURL: "https://exam-flow-bedc2-default-rtdb.europe-west1.firebasedatabase.app"
+        };
+        
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        let currentExamCode = "";
+        let currentStudent = "";
+        let progressChart = null;
+
+        // Koble til prøven via oppgitt kode
+        function kobleTilProeve() {
+            const codeInput = document.getElementById("examCodeInput").value.trim().toUpperCase();
+            if (!codeInput) {
+                alert("Vennligst oppgi en prøvekode!");
+                return;
+            }
+
+            currentExamCode = codeInput;
+            
+            // Lytt på påloggede elever
+            db.ref(`exams/${currentExamCode}/students_joined`).on('value', (snapshot) => {
+                const data = snapshot.val();
+                const studentList = document.getElementById("studentList");
+                studentList.innerHTML = "";
+
+                if (!data) {
+                    studentList.innerHTML = `<li class="text-slate-400 text-sm italic">Ingen elever har koblet til ennå.</li>`;
+                    document.getElementById("studentCount").innerText = "0";
+                    return;
+                }
+
+                const students = Object.keys(data);
+                document.getElementById("studentCount").innerText = students.length;
+
+                students.forEach(rawName => {
+                    const displayName = rawName.replace(/_/g, " ");
+                    const li = document.createElement("li");
+                    li.className = "p-2.5 rounded-xl border border-slate-100 hover:bg-sky-50 hover:border-sky-200 cursor-pointer transition-all flex justify-between items-center text-sm font-medium";
+                    li.onclick = () => velgElev(rawName, displayName);
+                    li.innerHTML = `<span>👤 ${displayName}</span> <span class="text-xs text-sky-600 font-bold">Vis ➔</span>`;
+                    studentList.appendChild(li);
+                });
+            });
+
+            // Lytt på hendelser/varsler
+            db.ref(`exams/${currentExamCode}/alerts`).on('value', (snapshot) => {
+                const alerts = snapshot.val();
+                const alertsLog = document.getElementById("alertsLog");
+                alertsLog.innerHTML = "";
+
+                if (!alerts) {
+                    alertsLog.innerHTML = `<p class="text-slate-400 italic">Ingen varsler ennå...</p>`;
+                    return;
+                }
+
+                Object.values(alerts).reverse().forEach(alert => {
+                    const item = document.createElement("div");
+                    item.className = "p-2 rounded-lg bg-slate-50 border border-slate-100 flex justify-between text-xs";
+                    item.innerHTML = `<span><b>${alert.student}:</b> ${alert.message}</span> <span class="text-slate-400">${alert.time}</span>`;
+                    alertsLog.appendChild(item);
+                });
+            });
+        }
+
+        // Velg en elev for å se live-tekst og graf
+        function velgElev(rawName, displayName) {
+            currentStudent = rawName;
+            document.getElementById("selectedStudentTitle").innerText = displayName;
+            document.getElementById("selectedStudentSub").innerText = `Lytter direkte på ${displayName}...`;
+
+            // Lytt på live-tekst
+            db.ref(`exams/${currentExamCode}/live_texts/${rawName}`).on('value', (snapshot) => {
+                const liveData = snapshot.val();
+                if (liveData) {
+                    document.getElementById("liveTextContent").innerText = liveData.text || "Tom besvarelse...";
+                    document.getElementById("liveWordCount").innerText = `${liveData.words || 0} ord`;
+                    document.getElementById("liveStatus").innerText = liveData.status || "Aktiv";
+                } else {
+                    document.getElementById("liveTextContent").innerText = "Ingen live-data tilgjengelig ennå...";
+                    document.getElementById("liveWordCount").innerText = "0 ord";
+                    document.getElementById("liveStatus").innerText = "Ukjent";
+                }
+            });
+
+            // Oppdater grafen for elevens progresjon
+            oppdaterElevGraf(rawName, displayName);
+        }
+
+        // Hent historikk og tegn graf
+        function oppdaterElevGraf(rawName, displayName) {
+            db.ref(`exams/${currentExamCode}/live_texts/${rawName}/history`).on('value', (snapshot) => {
+                const historyData = snapshot.val();
+                const labels = [];
+                const wordCounts = [];
+
+                if (historyData) {
+                    Object.values(historyData).forEach(point => {
+                        labels.push(point.time);
+                        wordCounts.push(point.words);
+                    });
+                }
+
+                const ctx = document.getElementById('studentProgressChart').getContext('2d');
+
+                if (progressChart) {
+                    progressChart.destroy();
+                }
+
+                progressChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: `Ordutvikling for ${displayName}`,
+                            data: wordCounts,
+                            borderColor: '#0284c7',
+                            backgroundColor: 'rgba(2, 132, 199, 0.08)',
+                            borderWidth: 2.5,
+                            fill: true,
+                            tension: 0.3,
+                            pointRadius: 4,
+                            pointBackgroundColor: '#0284c7'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: true, position: 'top' }
+                        },
+                        scales: {
+                            x: { title: { display: true, text: 'Klokkeslett' } },
+                            y: { title: { display: true, text: 'Antall ord' }, beginAtZero: true }
+                        }
+                    }
+                });
+            });
+        }
+    </script>
+</body>
+</html>
