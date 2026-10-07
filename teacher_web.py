@@ -3,6 +3,7 @@ import requests
 import pandas as pd
 import random
 import io
+import re
 from datetime import datetime, timedelta
 
 # Importerer biblioteker for nedlasting av PDF og Word
@@ -16,6 +17,7 @@ from docx.shared import Pt, RGBColor
 st.set_page_config(page_title="EXAMFLOW — Lærer Dashbord", layout="wide", page_icon="🌿")
 
 FIREBASE_URL = "https://exam-flow-bedc2-default-rtdb.europe-west1.firebasedatabase.app"
+NORMAL_WORDS_PER_MINUTE = 25  # Normal skrivehastighet for elever
 
 # --- HJELPEFUNKSJONER FOR NEDLASTING ---
 def generate_pdf_bytes(student_name, exam_code, text, prompt_text=""):
@@ -84,6 +86,15 @@ if "current_exam_code" not in st.session_state:
 if "history_cache" not in st.session_state:
     st.session_state["history_cache"] = {}
 
+if "last_text_cache" not in st.session_state:
+    st.session_state["last_text_cache"] = {}
+
+if "start_times" not in st.session_state:
+    st.session_state["start_times"] = {}
+
+if "last_change_time" not in st.session_state:
+    st.session_state["last_change_time"] = {}
+
 # --- DASHBORD HEADER ---
 st.title("🌿 EXAMFLOW — Lærer Dashbord")
 st.write("Administrer prøver, overvåk elever i realtid og last ned leverte besvarelser.")
@@ -109,7 +120,7 @@ with tabs[0]:
             st.session_state["current_exam_code"] = new_random_code
             st.rerun()
 
-    # AUTOMATISK REFRESH FRAGMENT
+    # AUTOMATISK REFRESH FRAGMENT HVERT 3. SEKUND
     @st.fragment(run_every=3)
     def render_live_monitoring(current_code):
         if not current_code:
@@ -126,25 +137,100 @@ with tabs[0]:
         if prompt_text:
             st.info(f"📌 **Oppgavetekst:** {prompt_text}")
 
-        # VARSLINGER
-        st.warning("⚠️ REGISTRERTE HENDELSER / VARSLINGER:")
-        alerts = exam_data.get("alerts", {})
-        if isinstance(alerts, dict) and alerts:
-            for alert_id, alert in reversed(list(alerts.items())):
-                if isinstance(alert, dict):
-                    st.error(f"🚨 **{alert.get('student', '')}** [{alert.get('time', '')}]: {alert.get('message', '')}")
-        else:
-            st.caption("Ingen spesielle hendelser registrert ennå.")
+        # SAMLER VARSLINGER FRA FIREBASE + AUTOMATISK ANOMALIDETEKSJON
+        raw_alerts = exam_data.get("alerts", {})
+        auto_alerts = []
 
-        # ELEVER
         students = exam_data.get("students_joined", {})
         live_texts = exam_data.get("live_texts", {})
 
+        now_time = datetime.now()
+        now_str = now_time.strftime("%H:%M:%S")
+
+        # ELEVANALYSE FOR MISTENKELIG ADBERD OG INAKTIVITET
+        if isinstance(students, dict) and students:
+            for student_key in students.keys():
+                display_name = student_key.replace("_", " ")
+                student_info = live_texts.get(student_key, {}) if isinstance(live_texts, dict) else {}
+
+                if isinstance(student_info, dict):
+                    text_content = student_info.get("text", "")
+                    word_count = student_info.get("words", len(text_content.split()))
+                else:
+                    text_content = str(student_info)
+                    word_count = len(text_content.split())
+
+                # Registrer starttidspunkt for å beregne forventet progresjon
+                if student_key not in st.session_state["start_times"]:
+                    st.session_state["start_times"][student_key] = now_time
+
+                prev_info = st.session_state["last_text_cache"].get(student_key, {"words": word_count, "time": now_time, "text": text_content})
+                prev_words = prev_info["words"]
+                word_diff = word_count - prev_words
+
+                # Tracker inaktivitet
+                if student_key not in st.session_state["last_change_time"]:
+                    st.session_state["last_change_time"][student_key] = now_time
+                elif word_diff != 0:
+                    st.session_state["last_change_time"][student_key] = now_time
+
+                # ⚡ 1. SJEKK FOR EKSTREM SKRIVEHASTIGHET / PASTE (LIM INN)
+                if word_diff >= 30:
+                    auto_alerts.append({
+                        "student": display_name,
+                        "time": now_str,
+                        "message": f"⚡ Ekstrem økning (+{word_diff} ord på 3 sek). Sannsynligvis limt inn ekstern tekst!"
+                    })
+
+                # 🔤 2. SJEKK FOR TASTATURENS SPAM / TILTET TEKST
+                words = text_content.split()
+                has_long_random_words = any(len(w) > 25 for w in words)
+                if has_long_random_words:
+                    auto_alerts.append({
+                        "student": display_name,
+                        "time": now_str,
+                        "message": "⚠️ Registrerte unormalt lange ord (tastaturbanking / meningsløs tekst)."
+                    })
+
+                # ⏸️ 3. SJEKK FOR INAKTIVITET (OVER 10 MINUTTER)
+                last_active = st.session_state["last_change_time"][student_key]
+                inactive_duration = now_time - last_active
+                if inactive_duration >= timedelta(minutes=10) and word_count > 0:
+                    minutes_inactive = int(inactive_duration.total_seconds() // 60)
+                    auto_alerts.append({
+                        "student": display_name,
+                        "time": now_str,
+                        "message": f"⏸️ Ingen skriveaktivitet på {minutes_inactive} minutter (over 10 min inaktiv)."
+                    })
+
+                st.session_state["last_text_cache"][student_key] = {
+                    "words": word_count,
+                    "time": now_time,
+                    "text": text_content
+                }
+
+        # VISNING AV VARSLINGER
+        st.warning("⚠️ REGISTRERTE HENDELSER / VARSLINGER:")
+        has_alerts = False
+
+        for a in auto_alerts:
+            st.error(f"🚨 **{a['student']}** [{a['time']}]: {a['message']}")
+            has_alerts = True
+
+        if isinstance(raw_alerts, dict) and raw_alerts:
+            for alert_id, alert in reversed(list(raw_alerts.items())):
+                if isinstance(alert, dict):
+                    st.error(f"🚨 **{alert.get('student', '')}** [{alert.get('time', '')}]: {alert.get('message', '')}")
+                    has_alerts = True
+
+        if not has_alerts:
+            st.caption("Ingen spesielle hendelser eller unormal skriveadferd registrert ennå.")
+
+        st.divider()
+
+        # ELEVOVERSIKT & GRAF
         if isinstance(students, dict) and students:
             st.success(f"Viser live data for {len(students)} elev(er) (Oppdateres automatisk hvert 3. sek)")
-
-            now_time = datetime.now()
-            now_str = now_time.strftime("%H:%M:%S")
 
             for student_key in students.keys():
                 display_name = student_key.replace("_", " ")
@@ -159,60 +245,80 @@ with tabs[0]:
                     word_count = len(text_content.split())
                     history = {}
 
-                # 1. LAGRE/OPPDATER LOKAL GRAFHISTORIKK OVER TID
+                # Starttid og tid gått for beregning av normal hastighet
+                start_dt = st.session_state["start_times"].get(student_key, now_time)
+                elapsed_minutes = max(0.1, (now_time - start_dt).total_seconds() / 60.0)
+                expected_normal_words = int(elapsed_minutes * NORMAL_WORDS_PER_MINUTE)
+
+                # BEREGN PROSENTVIS AVVIK I FORHOLD TIL NORMAL SKRIVEHASTIGHET
+                if expected_normal_words > 0:
+                    pct_vs_normal = ((word_count - expected_normal_words) / expected_normal_words) * 100
+                else:
+                    pct_vs_normal = 0.0
+
+                # BYGG LOKAL HISTORIKK FOR GRAFEN
                 if student_key not in st.session_state["history_cache"]:
                     st.session_state["history_cache"][student_key] = []
 
                 cache_list = st.session_state["history_cache"][student_key]
 
-                # Legg til datapunkt i historikken
                 if isinstance(history, dict) and history:
                     cache_list.clear()
                     for h in history.values():
                         if isinstance(h, dict):
-                            cache_list.append({"Klokkeslett": h.get("time"), "Antall ord": h.get("words")})
+                            t_str = h.get("time")
+                            w_val = h.get("words", 0)
+                            cache_list.append({
+                                "Klokkeslett": t_str,
+                                "Faktisk ordtall": w_val,
+                                "Normal skrivehastighet (forventet)": expected_normal_words
+                            })
                 else:
-                    # Bygg historikk fortløpende lokalt dersom eleven ikke sender history fra Firebase
                     if not cache_list:
-                        # Simulér startpunkt for 1 minutt siden hvis det er en del ord fra før
-                        start_time = (now_time - timedelta(seconds=30)).strftime("%H:%M:%S")
-                        cache_list.append({"Klokkeslett": start_time, "Antall ord": max(0, word_count - 10)})
-                        cache_list.append({"Klokkeslett": now_str, "Antall ord": word_count})
+                        start_time_str = (now_time - timedelta(seconds=30)).strftime("%H:%M:%S")
+                        cache_list.append({
+                            "Klokkeslett": start_time_str,
+                            "Faktisk ordtall": max(0, word_count - 10),
+                            "Normal skrivehastighet (forventet)": max(1, expected_normal_words - 5)
+                        })
+                        cache_list.append({
+                            "Klokkeslett": now_str,
+                            "Faktisk ordtall": word_count,
+                            "Normal skrivehastighet (forventet)": expected_normal_words
+                        })
                     else:
                         if cache_list[-1]["Klokkeslett"] != now_str:
-                            cache_list.append({"Klokkeslett": now_str, "Antall ord": word_count})
+                            cache_list.append({
+                                "Klokkeslett": now_str,
+                                "Faktisk ordtall": word_count,
+                                "Normal skrivehastighet (forventet)": expected_normal_words
+                            })
 
                 # ELEVKORT
                 with st.expander(f"👤 {display_name} — {word_count} ord | Status: Aktiv", expanded=True):
                     st.caption(f"Tekst fra {display_name}")
                     st.text_area(f"Tekstvisning_{student_key}", value=text_content, height=180, disabled=True, label_visibility="collapsed")
                     
-                    # 2. BEREGN PROSENT OG STATISTIKK
-                    first_words = cache_list[0]["Antall ord"] if cache_list else word_count
-                    
-                    if first_words > 0:
-                        pct_increase = ((word_count - first_words) / first_words) * 100
-                    else:
-                        pct_increase = 100.0 if word_count > 0 else 0.0
-
+                    first_words = cache_list[0]["Faktisk ordtall"] if cache_list else word_count
                     word_delta = word_count - first_words
 
-                    # NØKKELTALL / METRIKKER
                     m1, m2, m3 = st.columns(3)
                     m1.metric(label="Totalt antall ord", value=f"{word_count} ord", delta=f"{word_delta:+d} ord")
-                    m2.metric(label="Prosentvis økning", value=f"{pct_increase:.1f}%", delta=f"{pct_increase:.1f}%")
-                    m3.metric(label="Målinger registrert", value=f"{len(cache_list)} punkter")
+                    m2.metric(
+                        label="Økning vs normal hastighet (25 ord/min)", 
+                        value=f"{pct_vs_normal:+.1f}%", 
+                        delta=f"{pct_vs_normal:+.1f}% vs normal"
+                    )
+                    m3.metric(label="Forventet ordtall til nå", value=f"{expected_normal_words} ord")
 
                     st.write("")
-                    st.markdown("**📈 Skriveprogresjon (Ord over tid)**")
+                    st.markdown("**📈 Skriveprogresjon sammenlignet med normal skrivehastighet**")
 
-                    # 3. VIS GRAF MED LINJE
                     if cache_list and len(cache_list) >= 1:
                         df = pd.DataFrame(cache_list)
                         st.line_chart(df.set_index("Klokkeslett"))
                     else:
                         st.caption("📈 Registrerer skriveprogresjon...")
-
         else:
             st.info("Ingen elever har koblet seg til prøven ennå.")
 
