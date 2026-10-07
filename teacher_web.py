@@ -77,9 +77,12 @@ def generate_word_bytes(student_name, exam_code, text, prompt_text=""):
     buffer.seek(0)
     return buffer
 
-# --- SESSION STATE FOR PRØVEKODE ---
+# --- SESSION STATE FOR PRØVEKODE OG HISTORIKK ---
 if "current_exam_code" not in st.session_state:
     st.session_state["current_exam_code"] = "EXAM-5114"
+
+if "history_cache" not in st.session_state:
+    st.session_state["history_cache"] = {}
 
 # --- DASHBORD HEADER ---
 st.title("🌿 EXAMFLOW — Lærer Dashbord")
@@ -106,68 +109,91 @@ with tabs[0]:
             st.session_state["current_exam_code"] = new_random_code
             st.rerun()
 
-    if exam_code:
-        res = requests.get(f"{FIREBASE_URL}/exams/{exam_code}.json")
+    # FRAGMENT FOR LIVE AUTOMATISK OPPDATERING HVERT 3. SEKUND
+    @st.fragment(run_every=3)
+    def render_live_monitoring(current_code):
+        if not current_code:
+            return
+
+        res = requests.get(f"{FIREBASE_URL}/exams/{current_code}.json")
         exam_data = res.json() if res.status_code == 200 else None
 
         if not exam_data:
-            st.error(f"Fant ingen prøve med kode '{exam_code}'. Sjekk koden og prøv igjen.")
+            st.error(f"Fant ingen prøve med kode '{current_code}'. Sjekk koden og prøv igjen.")
+            return
+
+        prompt_text = exam_data.get("prompt") or exam_data.get("instruction") or exam_data.get("oppgave") or ""
+        if prompt_text:
+            st.info(f"📌 **Oppgavetekst:** {prompt_text}")
+
+        # 1. HENDELSER OG VARSLINGER
+        st.warning("⚠️ REGISTRERTE HENDELSER / VARSLINGER:")
+        alerts = exam_data.get("alerts", {})
+        if isinstance(alerts, dict) and alerts:
+            for alert_id, alert in reversed(list(alerts.items())):
+                if isinstance(alert, dict):
+                    st.error(f"🚨 **{alert.get('student', '')}** [{alert.get('time', '')}]: {alert.get('message', '')}")
         else:
-            prompt_text = exam_data.get("prompt") or exam_data.get("instruction") or exam_data.get("oppgave") or ""
-            if prompt_text:
-                st.info(f"📌 **Oppgavetekst:** {prompt_text}")
+            st.caption("Ingen spesielle hendelser registrert ennå.")
 
-            # 1. HENDELSER OG VARSLINGER
-            st.warning("⚠️ REGISTRERTE HENDELSER / VARSLINGER:")
-            alerts = exam_data.get("alerts", {})
-            if isinstance(alerts, dict) and alerts:
-                for alert_id, alert in reversed(list(alerts.items())):
-                    if isinstance(alert, dict):
-                        st.error(f"🚨 **{alert.get('student', '')}** [{alert.get('time', '')}]: {alert.get('message', '')}")
-            else:
-                st.caption("Ingen spesielle hendelser registrert ennå.")
+        # 2. ELEVSTATUS OG TEKST
+        students = exam_data.get("students_joined", {})
+        live_texts = exam_data.get("live_texts", {})
 
-            # 2. ELEVSTATUS OG TEKST
-            students = exam_data.get("students_joined", {})
-            live_texts = exam_data.get("live_texts", {})
+        if isinstance(students, dict) and students:
+            st.success(f"Viser live data for {len(students)} elev(er) (Oppdateres automatisk hvert 3. sek)")
 
-            if isinstance(students, dict) and students:
-                st.success(f"Viser live data for {len(students)} elev(er) (Oppdateres automatisk)")
+            now_str = datetime.now().strftime("%H:%M:%S")
 
-                for student_key in students.keys():
-                    display_name = student_key.replace("_", " ")
-                    student_info = live_texts.get(student_key, {}) if isinstance(live_texts, dict) else {}
+            for student_key in students.keys():
+                display_name = student_key.replace("_", " ")
+                student_info = live_texts.get(student_key, {}) if isinstance(live_texts, dict) else {}
 
-                    # Trygg uthenting av data uansett om det returneres som dict eller streng
-                    if isinstance(student_info, dict):
-                        text_content = student_info.get("text", "")
-                        word_count = student_info.get("words", len(text_content.split()))
-                        history = student_info.get("history", {})
+                if isinstance(student_info, dict):
+                    text_content = student_info.get("text", "")
+                    word_count = student_info.get("words", len(text_content.split()))
+                    history = student_info.get("history", {})
+                else:
+                    text_content = str(student_info)
+                    word_count = len(text_content.split())
+                    history = {}
+
+                # BYGG OG OPPDATER LOKAL GRAFHISTORIKK DERSOM FIREBASE IKKE HAR SENDT ENNÅ
+                if student_key not in st.session_state["history_cache"]:
+                    st.session_state["history_cache"][student_key] = []
+
+                # Hvis vi har ord og history mangler fra Firebase, registrer punkt nå
+                if not history:
+                    cache_list = st.session_state["history_cache"][student_key]
+                    if not cache_list or cache_list[-1]["Antall ord"] != word_count:
+                        cache_list.append({"Klokkeslett": now_str, "Antall ord": word_count})
+
+                # Ekspendert elevkort
+                with st.expander(f"👤 {display_name} — {word_count} ord | Status: Aktiv"):
+                    st.caption(f"Tekst fra {display_name}")
+                    st.text_area(f"Tekstvisning_{student_key}", value=text_content, height=180, disabled=True, label_visibility="collapsed")
+                    
+                    # GRAF-VISNING
+                    st.markdown("**📈 Skriveprogresjon (Ord over tid)**")
+                    df_data = []
+
+                    if isinstance(history, dict) and history:
+                        for h in history.values():
+                            if isinstance(h, dict):
+                                df_data.append({"Klokkeslett": h.get("time"), "Antall ord": h.get("words")})
                     else:
-                        text_content = str(student_info)
-                        word_count = len(text_content.split())
-                        history = {}
+                        df_data = st.session_state["history_cache"].get(student_key, [])
 
-                    # Ekspendert elevkort med alt innhold
-                    with st.expander(f"👤 {display_name} — {word_count} ord | Status: Aktiv"):
-                        st.caption(f"Tekst fra {display_name}")
-                        st.text_area(f"Tekstvisning_{student_key}", value=text_content, height=180, disabled=True, label_visibility="collapsed")
-                        
-                        # Graf for skriveprogresjon
-                        if isinstance(history, dict) and history:
-                            st.markdown("**📈 Skriveprogresjon (Ord over tid)**")
-                            df_data = []
-                            for h in history.values():
-                                if isinstance(h, dict):
-                                    df_data.append({"Klokkeslett": h.get("time"), "Antall ord": h.get("words")})
-                            
-                            if df_data:
-                                df = pd.DataFrame(df_data)
-                                st.line_chart(df.set_index("Klokkeslett"))
-                        else:
-                            st.caption("📈 Graf oppdateres når eleven har skrevet i mer enn 30 sekunder.")
-            else:
-                st.info("Ingen elever har koblet seg til prøven ennå.")
+                    if df_data and len(df_data) > 0:
+                        df = pd.DataFrame(df_data)
+                        st.line_chart(df.set_index("Klokkeslett"))
+                    else:
+                        st.caption("📈 Registrerer skriveprogresjon...")
+        else:
+            st.info("Ingen elever har koblet seg til prøven ennå.")
+
+    # Kjør live-visningen
+    render_live_monitoring(exam_code)
 
 # ================= TAB 2: LEVERTE BESVARELSER =================
 with tabs[1]:
